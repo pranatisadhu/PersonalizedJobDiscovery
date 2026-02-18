@@ -304,14 +304,36 @@ def score_job(client: Anthropic, resume_text: str, job: dict) -> tuple[int, str]
 
 # ── Output ────────────────────────────────────────────────────────────────────
 
+CSV_PATH = "job_matches.csv"
+
+
+def save_csv(ranked_jobs: list[dict], include_cover_letters: bool = True) -> None:
+    """Write ranked jobs to CSV. Always runs so results are never lost."""
+    with open(CSV_PATH, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=["rank", "title", "company", "location", "score",
+                        "explanation", "cover_letter", "url"],
+        )
+        writer.writeheader()
+        for rank, job in enumerate(ranked_jobs, start=1):
+            writer.writerow({
+                "rank": rank,
+                "title": job["title"],
+                "company": job["company"],
+                "location": job["location"],
+                "score": job["score"],
+                "explanation": job["explanation"],
+                "cover_letter": job.get("cover_letter", "") if include_cover_letters else "",
+                "url": job["url"],
+            })
+    label = "with cover letters" if include_cover_letters else "scores only"
+    console.print(f"[dim]Results saved to [bold]{CSV_PATH}[/bold] ({label})[/dim]")
+
 
 def print_results(ranked_jobs: list[dict]) -> None:
     """Render a Rich table of the scored, filtered, ranked job matches."""
     if not ranked_jobs:
-        console.print(
-            f"\n[yellow]No roles scored {MIN_SCORE}+ found.[/yellow] "
-            "Try lowering MIN_SCORE or expanding SEARCH_QUERIES."
-        )
         return
 
     table = Table(
@@ -358,25 +380,8 @@ def print_results(ranked_jobs: list[dict]) -> None:
         f"out of {MAX_JOBS_TO_SCORE} scored.[/dim]"
     )
 
-    # Save results to CSV
-    csv_path = "job_matches.csv"
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(
-            f, fieldnames=["rank", "title", "company", "location", "score", "explanation", "cover_letter", "url"]
-        )
-        writer.writeheader()
-        for rank, job in enumerate(ranked_jobs, start=1):
-            writer.writerow({
-                "rank": rank,
-                "title": job["title"],
-                "company": job["company"],
-                "location": job["location"],
-                "score": job["score"],
-                "explanation": job["explanation"],
-                "cover_letter": job.get("cover_letter", ""),
-                "url": job["url"],
-            })
-    console.print(f"[dim]Results saved to [bold]{csv_path}[/bold][/dim]")
+    # Final CSV save (with cover letters) + individual files
+    save_csv(ranked_jobs, include_cover_letters=True)
 
     # Save individual cover letter files
     cover_letters_dir = "cover_letters"
@@ -493,6 +498,16 @@ def main() -> None:
     # ── Step 4: Filter (score >= MIN_SCORE) and rank ─────────────────────────
     qualified = [j for j in scored_jobs if j["score"] >= MIN_SCORE]
     ranked = sorted(qualified, key=lambda j: j["score"], reverse=True)
+
+    # Save base CSV immediately after scoring so results are never lost
+    save_csv(ranked, include_cover_letters=False)
+
+    if not ranked:
+        console.print(
+            f"\n[yellow]No roles scored {MIN_SCORE}+ found.[/yellow] "
+            "Try lowering MIN_SCORE or expanding SEARCH_QUERIES."
+        )
+        return
 
     # ── Step 5: Generate cover letters for qualified jobs ─────────────────────
     with Progress(
