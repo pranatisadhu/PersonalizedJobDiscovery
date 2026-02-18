@@ -164,6 +164,37 @@ SYSTEM_PROMPT = (
     "You respond ONLY with valid JSON — no markdown, no prose outside the JSON object."
 )
 
+COVER_LETTER_SYSTEM_PROMPT = (
+    "You are an expert career coach and professional writer specializing in tech and product roles. "
+    "Write compelling, personalized cover letters that highlight specific alignment between "
+    "the candidate's experience and the job requirements. Be direct, confident, and specific — "
+    "no generic filler. Keep it under 350 words."
+)
+
+COVER_LETTER_TEMPLATE = """\
+Write a personalized, compelling cover letter for this candidate applying to the job below.
+
+Instructions:
+- Open with a strong hook that references something specific about the company or role
+- Highlight 2-3 concrete achievements from the resume that directly map to the job's requirements
+- Weave in relevant skills (SQL, Python, BigQuery, analytics, gaming/live-service if applicable)
+- Close with a confident call to action
+- Tone: professional but warm, not robotic
+- Do NOT use placeholder text like [Your Name] — write it as a complete, ready-to-send letter
+- Sign off as: Pranati Sadhu
+
+--- RESUME (truncated to first 4 000 chars) ---
+{resume}
+
+--- JOB POSTING ---
+Title: {title}
+Company: {company}
+Location: {location}
+Description:
+{description}
+
+Cover letter:"""
+
 # The user turn gives Claude the resume + job and asks for a structured score.
 SCORE_TEMPLATE = """\
 Evaluate how well the candidate's resume matches the job posting below.
@@ -194,6 +225,36 @@ Description:
 {description}
 
 JSON response:"""
+
+
+def generate_cover_letter(client: Anthropic, resume_text: str, job: dict) -> str:
+    """
+    Ask Claude to write a personalized cover letter for the given job.
+    Returns the cover letter as a string, or an error message on failure.
+    """
+    title = job.get("title", "Unknown")
+    company = job.get("company", {}).get("display_name", "Unknown")
+    location = job.get("location", {}).get("display_name", "Unknown")
+    description = (job.get("description") or "")[:3_000]
+
+    prompt = COVER_LETTER_TEMPLATE.format(
+        resume=resume_text[:4_000],
+        title=title,
+        company=company,
+        location=location,
+        description=description,
+    )
+
+    try:
+        message = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=600,
+            system=COVER_LETTER_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return message.content[0].text.strip()
+    except Exception as exc:  # noqa: BLE001
+        return f"Cover letter generation error: {exc}"
 
 
 def score_job(client: Anthropic, resume_text: str, job: dict) -> tuple[int, str]:
@@ -267,6 +328,7 @@ def print_results(ranked_jobs: list[dict]) -> None:
     table.add_column("Location", style="green", min_width=15)
     table.add_column("Score", justify="center", width=7, no_wrap=True)
     table.add_column("Why It Matches", min_width=45)
+    table.add_column("Cover Letter", min_width=55)
     table.add_column("Apply", style="blue", min_width=10)
 
     for rank, job in enumerate(ranked_jobs, start=1):
@@ -285,6 +347,7 @@ def print_results(ranked_jobs: list[dict]) -> None:
             job["location"],
             score_str,
             job["explanation"],
+            job.get("cover_letter", ""),
             job["url"],
         )
 
@@ -299,7 +362,7 @@ def print_results(ranked_jobs: list[dict]) -> None:
     csv_path = "job_matches.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
-            f, fieldnames=["rank", "title", "company", "location", "score", "explanation", "url"]
+            f, fieldnames=["rank", "title", "company", "location", "score", "explanation", "cover_letter", "url"]
         )
         writer.writeheader()
         for rank, job in enumerate(ranked_jobs, start=1):
@@ -310,9 +373,30 @@ def print_results(ranked_jobs: list[dict]) -> None:
                 "location": job["location"],
                 "score": job["score"],
                 "explanation": job["explanation"],
+                "cover_letter": job.get("cover_letter", ""),
                 "url": job["url"],
             })
     console.print(f"[dim]Results saved to [bold]{csv_path}[/bold][/dim]")
+
+    # Save individual cover letter files
+    cover_letters_dir = "cover_letters"
+    os.makedirs(cover_letters_dir, exist_ok=True)
+    for rank, job in enumerate(ranked_jobs, start=1):
+        letter = job.get("cover_letter", "")
+        if letter and not letter.startswith("Cover letter generation error"):
+            safe_company = "".join(c if c.isalnum() or c in " _-" else "" for c in job["company"])
+            safe_title = "".join(c if c.isalnum() or c in " _-" else "" for c in job["title"])
+            filename = f"{rank:02d}_{safe_company}_{safe_title}.txt".replace(" ", "_")[:80]
+            filepath = os.path.join(cover_letters_dir, filename)
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(f"Position: {job['title']}\n")
+                f.write(f"Company:  {job['company']}\n")
+                f.write(f"Location: {job['location']}\n")
+                f.write(f"Score:    {job['score']}/10\n")
+                f.write(f"Apply:    {job['url']}\n")
+                f.write("\n" + "─" * 60 + "\n\n")
+                f.write(letter)
+    console.print(f"[dim]Cover letters saved to [bold]{cover_letters_dir}/[/bold][/dim]")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -410,7 +494,33 @@ def main() -> None:
     qualified = [j for j in scored_jobs if j["score"] >= MIN_SCORE]
     ranked = sorted(qualified, key=lambda j: j["score"], reverse=True)
 
-    # ── Step 5: Display ───────────────────────────────────────────────────────
+    # ── Step 5: Generate cover letters for qualified jobs ─────────────────────
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task(
+            f"Generating cover letters for {len(ranked)} qualified role(s)...",
+            total=len(ranked),
+        )
+        for job in ranked:
+            # Reconstruct the raw job dict fields needed by generate_cover_letter
+            raw_job = {
+                "title": job["title"],
+                "company": {"display_name": job["company"]},
+                "location": {"display_name": job["location"]},
+                "description": next(
+                    (j.get("description") for j in jobs_to_score
+                     if j.get("title") == job["title"]
+                     and j.get("company", {}).get("display_name") == job["company"]),
+                    "",
+                ),
+            }
+            job["cover_letter"] = generate_cover_letter(client, resume_text, raw_job)
+            progress.advance(task)
+
+    # ── Step 6: Display ───────────────────────────────────────────────────────
     print_results(ranked)
 
 
