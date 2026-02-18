@@ -1,0 +1,5 @@
+anthropic>=0.40.0
+pdfplumber>=0.11.0
+requests>=2.32.0
+python-dotenv>=1.0.0
+rich>=13.9.0
