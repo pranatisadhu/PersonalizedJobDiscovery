@@ -380,29 +380,6 @@ def print_results(ranked_jobs: list[dict]) -> None:
         f"out of {MAX_JOBS_TO_SCORE} scored.[/dim]"
     )
 
-    # Final CSV save (with cover letters) + individual files
-    save_csv(ranked_jobs, include_cover_letters=True)
-
-    # Save individual cover letter files
-    cover_letters_dir = "cover_letters"
-    os.makedirs(cover_letters_dir, exist_ok=True)
-    for rank, job in enumerate(ranked_jobs, start=1):
-        letter = job.get("cover_letter", "")
-        if letter and not letter.startswith("Cover letter generation error"):
-            safe_company = "".join(c if c.isalnum() or c in " _-" else "" for c in job["company"])
-            safe_title = "".join(c if c.isalnum() or c in " _-" else "" for c in job["title"])
-            filename = f"{rank:02d}_{safe_company}_{safe_title}.txt".replace(" ", "_")[:80]
-            filepath = os.path.join(cover_letters_dir, filename)
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(f"Position: {job['title']}\n")
-                f.write(f"Company:  {job['company']}\n")
-                f.write(f"Location: {job['location']}\n")
-                f.write(f"Score:    {job['score']}/10\n")
-                f.write(f"Apply:    {job['url']}\n")
-                f.write("\n" + "─" * 60 + "\n\n")
-                f.write(letter)
-    console.print(f"[dim]Cover letters saved to [bold]{cover_letters_dir}/[/bold][/dim]")
-
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -499,9 +476,6 @@ def main() -> None:
     qualified = [j for j in scored_jobs if j["score"] >= MIN_SCORE]
     ranked = sorted(qualified, key=lambda j: j["score"], reverse=True)
 
-    # Save base CSV immediately after scoring so results are never lost
-    save_csv(ranked, include_cover_letters=False)
-
     if not ranked:
         console.print(
             f"\n[yellow]No roles scored {MIN_SCORE}+ found.[/yellow] "
@@ -537,6 +511,40 @@ def main() -> None:
 
     # ── Step 6: Display ───────────────────────────────────────────────────────
     print_results(ranked)
+
+    # ── Step 7: Save outputs ───────────────────────────────────────────────────
+    import sys as _sys
+    cwd = os.getcwd()
+    console.print(f"[dim]Saving files to: [bold]{cwd}[/bold][/dim]")
+
+    try:
+        save_csv(ranked, include_cover_letters=True)
+    except Exception as exc:
+        console.print(f"[red]ERROR saving CSV:[/red] {exc}", file=_sys.stderr)
+
+    cover_letters_dir = "cover_letters"
+    try:
+        os.makedirs(cover_letters_dir, exist_ok=True)
+        saved = 0
+        for rank, job in enumerate(ranked, start=1):
+            letter = job.get("cover_letter", "")
+            if letter and not letter.startswith("Cover letter generation error"):
+                safe_company = "".join(c if c.isalnum() or c in " _-" else "" for c in job["company"])
+                safe_title = "".join(c if c.isalnum() or c in " _-" else "" for c in job["title"])
+                filename = f"{rank:02d}_{safe_company}_{safe_title}.txt".replace(" ", "_")[:80]
+                filepath = os.path.join(cover_letters_dir, filename)
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(f"Position: {job['title']}\n")
+                    f.write(f"Company:  {job['company']}\n")
+                    f.write(f"Location: {job['location']}\n")
+                    f.write(f"Score:    {job['score']}/10\n")
+                    f.write(f"Apply:    {job['url']}\n")
+                    f.write("\n" + "─" * 60 + "\n\n")
+                    f.write(letter)
+                saved += 1
+        console.print(f"[dim]{saved} cover letter(s) saved to [bold]{cover_letters_dir}/[/bold][/dim]")
+    except Exception as exc:
+        console.print(f"[red]ERROR saving cover letters:[/red] {exc}", file=_sys.stderr)
 
 
 if __name__ == "__main__":
