@@ -18,6 +18,7 @@ Environment variables (see .env):
     ADZUNA_APP_KEY
 """
 
+import csv
 import hashlib
 import json
 import os
@@ -293,6 +294,25 @@ def print_results(ranked_jobs: list[dict]) -> None:
         f"\n[dim]Showing {len(ranked_jobs)} qualified role(s) "
         f"out of {MAX_JOBS_TO_SCORE} scored.[/dim]"
     )
+
+    # Save results to CSV
+    csv_path = "job_matches.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f, fieldnames=["rank", "title", "company", "location", "score", "explanation", "url"]
+        )
+        writer.writeheader()
+        for rank, job in enumerate(ranked_jobs, start=1):
+            writer.writerow({
+                "rank": rank,
+                "title": job["title"],
+                "company": job["company"],
+                "location": job["location"],
+                "score": job["score"],
+                "explanation": job["explanation"],
+                "url": job["url"],
+            })
+    console.print(f"[dim]Results saved to [bold]{csv_path}[/bold][/dim]")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
